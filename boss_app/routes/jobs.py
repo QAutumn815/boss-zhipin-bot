@@ -169,7 +169,20 @@ def _save_job_with_dedup(job: dict) -> tuple:
         if existing:
             update_application_from_job(existing["id"], job)
             return existing["id"], False, existing
-    # 新记录（不再用 dedup_key 合并不同 URL 的岗位）
+
+    # URL 未命中时，用 dedup_key 查重（防止同一岗位不同 URL 重复保存导致 UNIQUE 冲突）
+    dedup_key = compute_dedup_key(job)
+    if dedup_key:
+        existing = get_application_by_dedup_key(dedup_key)
+        if existing:
+            if job.get("url") and existing.get("job_url") != job["url"]:
+                db = get_db()
+                db.execute("UPDATE applications SET job_url=? WHERE id=?", (job["url"], existing["id"]))
+                db.commit()
+            update_application_from_job(existing["id"], job)
+            return existing["id"], False, existing
+
+    # 新记录
     aid = add_application(job)
     if aid:
         print(f"  [保存] 新岗位 ID={aid}: {job.get('title','')[:30]} → {job['url'][:60]}")

@@ -604,7 +604,39 @@ class BossScraper:
         )
         for attempt in range(3):
             try:
-                await self.page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                # 分两步导航：先 commit（等初始响应），再等 DOM 加载
+                try:
+                    await asyncio.wait_for(
+                        self.page.goto(url, wait_until="commit", timeout=15000),
+                        timeout=20,
+                    )
+                except asyncio.TimeoutError:
+                    print(f"  ⚠️ 搜索导航超时({attempt+1}/3): {keyword}@{city_code}")
+                    if attempt < 2:
+                        try:
+                            await self.page.goto("about:blank", timeout=3000)
+                        except Exception:
+                            pass
+                        await async_pause(2, 3)
+                        continue
+                    return []
+                try:
+                    await self.page.wait_for_load_state("domcontentloaded", timeout=10000)
+                except Exception:
+                    pass  # 即使 load_state 超时，页面可能已有部分内容可解析
+                # 确认 URL 已跳转到目标搜索页
+                current_url = self.page.url
+                if "zhipin.com" not in current_url or "job" not in current_url:
+                    print(f"  ⚠️ 搜索页面未正确跳转({attempt+1}/3): {keyword}@{city_code} → {current_url}")
+                    if attempt < 2:
+                        try:
+                            await self.page.goto("about:blank", timeout=3000)
+                        except Exception:
+                            pass
+                        await async_pause(2, 3)
+                        continue
+                    return []
+
                 await async_pause(3, 5)
 
                 all_jobs = []
@@ -686,6 +718,11 @@ class BossScraper:
             except Exception as e:
                 if attempt < 2:
                     print(f"  ⚠️ 搜索重试 ({attempt+1}/3): {e}")
+                    # 重试前跳到 about:blank 重置浏览器状态（修复 NS_BINDING_ABORTED 等问题）
+                    try:
+                        await self.page.goto("about:blank", timeout=3000)
+                    except Exception:
+                        pass
                     await async_pause(2, 4)
                 else:
                     print(f"  ❌ 搜索失败: {keyword}@{city_code}: {e}")

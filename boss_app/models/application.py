@@ -72,20 +72,36 @@ def add_application(job: dict) -> int:
         db.commit()
         return cur.lastrowid if cur.lastrowid else 0
     except sqlite3.IntegrityError as e:
-        # UNIQUE constraint failed - URL already exists (including soft-deleted records)
-        if "UNIQUE" in str(e) and job.get("url"):
-            url = job["url"]
-            # 查找已存在的记录（包括已软删除的）
-            row = db.execute("SELECT id, deleted_at FROM applications WHERE job_url=?", (url,)).fetchone()
+        if "UNIQUE" not in str(e):
+            raise
+        # 1) 按 URL 查找已有记录（含软删除）
+        if job.get("url"):
+            row = db.execute(
+                "SELECT id, deleted_at FROM applications WHERE job_url=?", (job["url"],)
+            ).fetchone()
             if row:
                 aid = row["id"]
                 if row["deleted_at"]:
-                    # 已软删除的记录：恢复并更新
-                    db.execute("UPDATE applications SET deleted_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?", (aid,))
+                    db.execute(
+                        "UPDATE applications SET deleted_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?", (aid,)
+                    )
                 update_application_from_job(aid, job)
                 db.commit()
                 return aid
-        # Other error or no URL - re-raise
+        # 2) URL 未命中时按 dedup_key 查找
+        if dedup_key:
+            row = db.execute(
+                "SELECT id, deleted_at FROM applications WHERE dedup_key=? AND deleted_at IS NULL", (dedup_key,)
+            ).fetchone()
+            if row:
+                aid = row["id"]
+                if job.get("url") and row.get("job_url") != job["url"]:
+                    # 保留较新的 URL
+                    pass
+                update_application_from_job(aid, job)
+                db.commit()
+                return aid
+        # 3) 都找不到则仍然抛异常（不应发生）
         raise
 
 
